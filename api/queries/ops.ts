@@ -21,6 +21,16 @@ export async function listLotes() {
   return rows.map((r) => ({ ...r.lote, clienteNome: r.clienteNome ?? "" }));
 }
 
+export async function getLotePorNumero(numero: number) {
+  const db = getDb();
+  const [row] = await db
+    .select({ lote: lotes, cliente: clientes })
+    .from(lotes)
+    .leftJoin(clientes, eq(lotes.clienteId, clientes.id))
+    .where(eq(lotes.numero, numero));
+  return row ?? null;
+}
+
 export async function getLote(id: number) {
   const db = getDb();
   const [row] = await db

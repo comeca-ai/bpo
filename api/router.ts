@@ -9,6 +9,7 @@ import {
   feedDoLote,
   filaValidacao,
   getLote,
+  getLotePorNumero,
   listClientes,
   listLotes,
   metricasOps,
@@ -21,6 +22,9 @@ export const appRouter = createRouter({
   lotes: createRouter({
     list: publicQuery.query(() => listLotes()),
     get: publicQuery.input(z.object({ id: z.number() })).query(({ input }) => getLote(input.id)),
+    porNumero: publicQuery
+      .input(z.object({ numero: z.number() }))
+      .query(({ input }) => getLotePorNumero(input.numero)),
     entregar: publicQuery
       .input(z.object({ id: z.number() }))
       .mutation(({ input }) => entregarLote(input.id)),
