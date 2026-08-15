@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import MascotAvatar from '@/components/MascotAvatar';
 import type { MascotId } from '@/components/MascotAvatar';
-import { setOpsState } from '@/lib/ops-store';
+import { trpc } from '@/providers/trpc';
+import { LOTE_DEMO_NUMERO } from '@/lib/ops-store';
 import { cn } from '@/lib/utils';
 
 /* ---------- tipos e helpers de texto rico ---------- */
@@ -15,50 +16,99 @@ const ho = (t: string): Seg => ({ t, hl: 'o' });
 const ht = (t: string): Seg => ({ t, hl: 't' });
 const plain = (segs: Seg[]) => segs.map((g) => g.t).join('');
 
-function Txt({ segs }: { segs: Seg[] }) {
-  return (
-    <>
-      {segs.map((g, i) =>
-        g.b ? (
-          <b key={i} className="text-aj-ink">
-            {g.t}
-          </b>
-        ) : (
-          <span key={i}>{g.t}</span>
-        ),
-      )}
-    </>
-  );
+/** texto do audit trail do backend: `<b>…</b>` → negrito */
+function parseRich(texto: string): Seg[] {
+  const segs: Seg[] = [];
+  const re = /<b>([\s\S]*?)<\/b>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(texto))) {
+    if (m.index > last) segs.push(s(texto.slice(last, m.index)));
+    segs.push(bd(m[1]));
+    last = m.index + m[0].length;
+  }
+  if (last < texto.length) segs.push(s(texto.slice(last)));
+  return segs.length > 0 ? segs : [s(texto)];
 }
 
-function PageLine({ segs }: { segs: Seg[] }) {
-  return (
-    <div>
-      {segs.map((g, i) =>
-        g.hl ? (
-          <span
-            key={i}
-            className={cn(
-              'rounded-[3px] px-[3px] font-black',
-              g.hl === 'o' ? 'bg-[rgba(245,130,13,.18)]' : 'bg-[rgba(47,199,158,.2)]',
-            )}
-          >
-            {g.t}
-          </span>
-        ) : (
-          <span key={i}>{g.t}</span>
-        ),
-      )}
-    </div>
-  );
+/** linha do "scan": `<hl>…</hl>` highlight laranja, `<hlt>…</hlt>` highlight teal */
+function parsePageLine(line: string): Seg[] {
+  const segs: Seg[] = [];
+  const re = /<hl>([\s\S]*?)<\/hl>|<hlt>([\s\S]*?)<\/hlt>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line))) {
+    if (m.index > last) segs.push(s(line.slice(last, m.index)));
+    if (m[1] !== undefined) segs.push(ho(m[1]));
+    else segs.push(ht(m[2]));
+    last = m.index + m[0].length;
+  }
+  if (last < line.length) segs.push(s(line.slice(last)));
+  return segs.length > 0 ? segs : [s(line)];
 }
 
-/* ---------- dados seed (verbatim do mockup aprovado) ---------- */
+function safeJson<T>(raw: string | null | undefined, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/* ---------- helpers de data/texto do pedido ---------- */
+
+const p2 = (n: number) => String(n).padStart(2, '0');
+const DIAS = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'] as const;
+
+function asDate(v: unknown): Date | null {
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
+  if (typeof v === 'string' || typeof v === 'number') {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+/** "seg 18/08, 08h14" */
+function fmtDiaHora(d: Date) {
+  return `${DIAS[d.getDay()]} ${p2(d.getDate())}/${p2(d.getMonth() + 1)}, ${p2(d.getHours())}h${p2(d.getMinutes())}`;
+}
+
+/** "14h15" */
+function fmtHora(d: Date) {
+  return `${p2(d.getHours())}h${p2(d.getMinutes())}`;
+}
+
+const CANAL: Record<string, string> = {
+  whatsapp: 'WhatsApp',
+  email: 'E-mail',
+  drive: 'Drive',
+  upload: 'Upload',
+};
+
+function fmtPreco(n: number) {
+  return `R$ ${String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.')}/mês`;
+}
+
+/* ---------- fila de validação (shape do backend → UI) ---------- */
+
+type FilaDoc = {
+  id: number;
+  nomeOriginal: string;
+  nomeFinal: string | null;
+  origem: string;
+  confianca: number; // 0-100
+  pageLines: string | null;
+  metaRows: string | null;
+  duvida: string | null;
+};
 
 type QueueItem = {
+  documentoId: number;
   file: string;
   from: string;
-  conf: number;
+  conf: number; // 0-1
   page: Seg[][];
   rows: [string, string][];
   doubt: string;
@@ -66,104 +116,23 @@ type QueueItem = {
   rnNew: string;
 };
 
-const QUEUE: QueueItem[] = [
-  {
-    file: 'IMG_20260814_1432.jpg',
-    from: 'WhatsApp · Pedro (mestre de obras)',
-    conf: 0.71,
-    page: [
-      [s('GESSOPAR MATERIAIS LTDA · '), ho('CNPJ 12.345.678/0001-90')],
-      [s('NOTA FISCAL Nº '), ho('8.412'), s(' · '), ho('14/08/2026')],
-      [s('Gesso acartonado 42un · TOTAL '), ht('R$ 4.280,00')],
-      [s('Entrega: '), ht('Obra Litoral Plaza — apto 302')],
-    ],
-    rows: [
-      ['Tipo', 'NF de material'],
-      ['Obra', 'Litoral Plaza'],
-      ['Valor', 'R$ 4.280,00'],
-    ],
-    doubt:
-      '⚠ “Gessopar” ou “Gesso Pará”? Dicionário v7 tem os dois. E entra no resumo de custo do apto 302?',
-    rnOld: 'IMG_20260814_1432.jpg',
-    rnNew: '2026-08-NF-MAT-GESSOPAR-LITORAL-R4280.pdf',
-  },
-  {
-    file: 'WhatsApp Image 2026-08-13 at 17.52.jpeg',
-    from: 'WhatsApp · Pedro',
-    conf: 0.66,
-    page: [
-      [s('DIÁRIO DE OBRA — LITORAL PLAZA')],
-      [s('Dia '), ho('13/08'), s(' (ou 18?) · 14 pedreiros')],
-      [s('Laje do 2º pavimento concretada ✓')],
-      [s('Assinatura '), ho('ilegível')],
-    ],
-    rows: [
-      ['Tipo', 'Diário de obra'],
-      ['Obra', 'Litoral Plaza'],
-      ['Data', '13/08? (baixa certeza)'],
-    ],
-    doubt: '⚠ Data ambígua: “13” ou “18”? Cruzando com o diário anterior, 13/08 é o provável.',
-    rnOld: 'WhatsApp Image 2026-08-13 at 17.52.jpeg',
-    rnNew: '2026-08-DIARIO-OBRA-LITORAL-DIA13.pdf',
-  },
-  {
-    file: 'holerite antonio julho.pdf',
-    from: 'E-mail · cliente',
-    conf: 0.88,
-    page: [
-      [s('RECIBO DE PAGAMENTO — '), ho('ANTÔNIO S.')],
-      [s('Ref. '), ho('07/2026'), s(' · R$ 2.400,00')],
-      [s('Função: pedreiro — Litoral Plaza')],
-    ],
-    rows: [
-      ['Tipo', 'Holerite (fora do escopo)'],
-      ['Pessoa', 'Antônio S.'],
-      ['Valor', 'R$ 2.400,00'],
-    ],
-    doubt:
-      '⚠ Confiança alta, MAS holerite é “docs de pessoas” — fora do escopo contratado. Guardar à parte e sugerir add-on.',
-    rnOld: 'holerite antonio julho.pdf',
-    rnNew: '(fora de escopo — pasta “_revisar” por enquanto)',
-  },
-  {
-    file: 'nota 8413 torta.jpeg',
-    from: 'WhatsApp · Pedro',
-    conf: 0.58,
-    page: [
-      [s('Imagem torta ~30° · sombra no rodapé')],
-      [s('Nº '), ho('8.413'), s(' · fornecedor ilegível')],
-      [s('Total '), ho('R$ 9?0,00')],
-    ],
-    rows: [
-      ['Tipo', 'NF de material (provável)'],
-      ['Legibilidade', '58%'],
-      ['Valor', 'incerto'],
-    ],
-    doubt: '⚠ Abaixo de 0,75 em foto: regra v7 diz pedir 2ª foto antes de decidir.',
-    rnOld: 'nota 8413 torta.jpeg',
-    rnNew: '(aguardando 2ª foto do mestre de obras)',
-  },
-  {
-    file: 'contrato pedreiro FINAL final2.pdf',
-    from: 'Drive · pasta “contratos”',
-    conf: 0.81,
-    page: [
-      [s('CONTRATO DE PRESTAÇÃO DE SERVIÇO')],
-      [s('Contratante: '), ho('Sol Nascente')],
-      [s('Contratado: '), ho('“Seu Zé”'), s(' — José Ferreira MEI?')],
-      [s('Vigência '), ho('01/08 a 30/11/2026')],
-    ],
-    rows: [
-      ['Tipo', 'Contrato MO'],
-      ['Parte', 'José Ferreira MEI (dicionário v7)'],
-      ['Vigência', 'até 30/11/2026'],
-    ],
-    doubt:
-      '⚠ “Seu Zé” = José Ferreira MEI (dicionário v7). Confirma? Se sim, gera alerta de vencimento p/ 30/11.',
-    rnOld: 'contrato pedreiro FINAL final2.pdf',
-    rnNew: '2026-08-CONTRATO-MO-JOSE-FERREIRA-LITORAL.pdf',
-  },
-];
+function toQueueItem(doc: FilaDoc): QueueItem {
+  const pageRaw = safeJson<string[]>(doc.pageLines, []);
+  const rows = safeJson<[string, string][]>(doc.metaRows, []);
+  return {
+    documentoId: doc.id,
+    file: doc.nomeOriginal,
+    from: doc.origem,
+    conf: Math.min(Math.max(doc.confianca / 100, 0), 1),
+    page: pageRaw.map(parsePageLine),
+    rows,
+    doubt: doc.duvida ?? '',
+    rnOld: doc.nomeOriginal,
+    rnNew: doc.nomeFinal ?? doc.nomeOriginal,
+  };
+}
+
+/* ---------- time (cosmético — rotação de tarefas client-side) ---------- */
 
 type TeamMember = {
   id: MascotId;
@@ -221,29 +190,47 @@ const TEAM: TeamMember[] = [
 ];
 
 type FeedWho = MascotId | 'sys' | 'me';
-type FeedItem = { id: number; who: FeedWho; segs: Seg[]; alert?: boolean; minute: number };
-
-const FEED_SEED: { who: FeedWho; segs: Seg[] }[] = [
-  {
-    who: 'bia',
-    segs: [s('Triagem: '), bd('12 fotos'), s(' do WhatsApp classificadas (conf. média 0,94)')],
-  },
-  { who: 'sys', segs: [s('OCR concluído: '), bd('34 escaneados'), s(' · custo R$ 1,36')] },
-  { who: 'lia', segs: [s('Índice: '), bd('apto 302'), s(' agora tem 9 documentos ligados')] },
-];
-
-const AMBIENT: { who: FeedWho; segs: Seg[] }[] = [
-  { who: 'bia', segs: [s('Duplicado detectado: nota '), bd('8.412'), s(' enviada 2× — fundida')] },
-  { who: 'tom', segs: [s('Pasta '), bd('/Obras/Litoral-Plaza/medições'), s(' criada no Drive')] },
-  { who: 'lia', segs: [bd('Cartão-resumo'), s(' da medição parcial 2 gerado')] },
-  { who: 'pedro', segs: [s('Pedro conferiu a amostra de 5% — '), bd('sem divergências')] },
-  { who: 'sys', segs: [s('Governança: concordância 97,2% · threshold mantido em 0,90')] },
-  { who: 'tom', segs: [bd('3 recibos'), s(' do Seu Zé renomeados no padrão v7')] },
-  { who: 'bia', segs: [s('Foto de fachada → tipo '), bd('“registro de obra”'), s(' (conf. 0,93)')] },
-  { who: 'lia', segs: [s('Busca testada: “ART da laje” responde em '), bd('1,8s')] },
-];
+type FeedItem = { id: number; who: FeedWho; segs: Seg[]; alert?: boolean; time: string };
 
 /* ---------- micro-componentes ---------- */
+
+function Txt({ segs }: { segs: Seg[] }) {
+  return (
+    <>
+      {segs.map((g, i) =>
+        g.b ? (
+          <b key={i} className="text-aj-ink">
+            {g.t}
+          </b>
+        ) : (
+          <span key={i}>{g.t}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+function PageLine({ segs }: { segs: Seg[] }) {
+  return (
+    <div>
+      {segs.map((g, i) =>
+        g.hl ? (
+          <span
+            key={i}
+            className={cn(
+              'rounded-[3px] px-[3px] font-black',
+              g.hl === 'o' ? 'bg-[rgba(245,130,13,.18)]' : 'bg-[rgba(47,199,158,.2)]',
+            )}
+          >
+            {g.t}
+          </span>
+        ) : (
+          <span key={i}>{g.t}</span>
+        ),
+      )}
+    </div>
+  );
+}
 
 function LiveDot() {
   return <span className="h-[9px] w-[9px] shrink-0 animate-pulse-ring rounded-full bg-aj-teal" />;
@@ -286,6 +273,10 @@ function Rise({
       {children}
     </motion.div>
   );
+}
+
+function Sk({ className }: { className?: string }) {
+  return <div className={cn('animate-pulse bg-aj-rail/50', className)} />;
 }
 
 function useCountUp(target: number, duration = 900): number {
@@ -340,108 +331,177 @@ function FeedAvatar({ who }: { who: FeedWho }) {
   return <MascotAvatar id={who} size={28} radius={8} className="shrink-0" />;
 }
 
-/* ---------- página: Console Ops ---------- */
+/* ---------- página: Console Ops (backend tRPC real) ---------- */
 
 export default function Home() {
-  const [feed, setFeed] = useState<FeedItem[]>(() =>
-    FEED_SEED.map((f, i) => ({ id: i + 1, who: f.who, segs: f.segs, minute: 15 + i })),
+  const utils = trpc.useUtils();
+
+  /* ----- dados do servidor: lote demo #482 ----- */
+  const loteQ = trpc.lotes.porNumero.useQuery(
+    { numero: LOTE_DEMO_NUMERO },
+    { refetchInterval: 3000, retry: 1 },
   );
-  const minuteRef = useRef(14 + FEED_SEED.length);
-  const idRef = useRef(FEED_SEED.length);
-  const tickRef = useRef(0);
+  const lote = loteQ.data?.lote ?? null;
+  const cliente = loteQ.data?.cliente ?? null;
+  const loteId = lote?.id ?? 0;
 
-  const [tick, setTick] = useState(0);
-  const [qi, setQi] = useState(0);
-  const [docsDone, setDocsDone] = useState(79);
-  const [queueLeft, setQueueLeft] = useState(QUEUE.length);
-  const [validated, setValidated] = useState(187);
-  const [delivered, setDelivered] = useState(false);
-  const [scopeVisible, setScopeVisible] = useState(false);
-  const [scopeSuggested, setScopeSuggested] = useState(false);
-  const [editDraft, setEditDraft] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  const metQ = trpc.metricas.ops.useQuery(
+    { loteId },
+    { enabled: loteId > 0, refetchInterval: 3000, retry: 1 },
+  );
+  const filaQ = trpc.validacao.fila.useQuery(
+    { loteId },
+    { enabled: loteId > 0, refetchInterval: 3000, retry: 1 },
+  );
+  const ctxQ = trpc.clientes.contexto.useQuery(
+    { clienteId: cliente?.id ?? 0 },
+    { enabled: !!cliente, refetchInterval: 10000, retry: 1 },
+  );
 
-  const addFeed = useCallback((who: FeedWho, segs: Seg[], alert = false) => {
-    minuteRef.current += 1;
-    const item: FeedItem = { id: ++idRef.current, who, segs, alert, minute: minuteRef.current };
+  /* ----- feed ao vivo (incremental por sinceId, prepend) ----- */
+  const [feed, setFeed] = useState<FeedItem[]>([]);
+  const sinceRef = useRef(0);
+  const [sinceId, setSinceId] = useState(0);
+  const localSeq = useRef(0);
+
+  const evQ = trpc.eventos.porLote.useQuery(
+    { loteId, sinceId },
+    { enabled: loteId > 0, refetchInterval: 3000, retry: 1 },
+  );
+
+  useEffect(() => {
+    const rows = evQ.data;
+    if (!rows || rows.length === 0) return;
+    const fresh = rows.filter((r) => r.id > sinceRef.current);
+    if (fresh.length === 0) return;
+    sinceRef.current = Math.max(...fresh.map((r) => r.id));
+    setSinceId(sinceRef.current);
+    const items: FeedItem[] = fresh.map((r) => ({
+      id: r.id,
+      who: r.ator,
+      segs: parseRich(r.texto),
+      alert: r.alerta,
+      time: fmtHora(asDate(r.criadoEm) ?? new Date()),
+    }));
+    setFeed((prev) => [...items, ...prev].slice(0, 9));
+  }, [evQ.data]);
+
+  /** itens cosméticos locais (alerta de escopo / upsell) — ids negativos */
+  const addLocalFeed = useCallback((who: FeedWho, segs: Seg[], alert = false) => {
+    localSeq.current += 1;
+    const item: FeedItem = { id: -localSeq.current, who, segs, alert, time: fmtHora(new Date()) };
     setFeed((prev) => [item, ...prev].slice(0, 9));
   }, []);
 
-  /* sincroniza badge da nav + quota do rodapé da sidebar */
-  useEffect(() => {
-    setOpsState({ queueLeft, validatedToday: validated });
-  }, [queueLeft, validated]);
+  /* ----- mutações ----- */
+  const invalidateOps = useCallback(() => {
+    void utils.lotes.porNumero.invalidate();
+    void utils.metricas.ops.invalidate();
+    void utils.validacao.fila.invalidate();
+    void utils.eventos.porLote.invalidate();
+  }, [utils]);
 
-  /* motor de tiques: feed ambiente + time respirando (3.4s) */
+  const decidir = trpc.validacao.decidir.useMutation({ onSuccess: invalidateOps });
+  const entregar = trpc.lotes.entregar.useMutation({ onSuccess: invalidateOps });
+  const { mutate: simTickMutate } = trpc.sim.tick.useMutation();
+
+  /* ----- motor de tiques: sim.tick (3,4s) enquanto em trabalho + time respirando ----- */
+  const [tick, setTick] = useState(0);
+  const tickRef = useRef(0);
+  const simActive = lote?.status === 'em_validacao' || lote?.status === 'processando';
   useEffect(() => {
     const id = setInterval(() => {
       tickRef.current += 1;
       setTick(tickRef.current);
-      const ev = AMBIENT[tickRef.current % AMBIENT.length];
-      addFeed(ev.who, ev.segs);
+      if (simActive && loteId > 0) simTickMutate({ loteId });
     }, 3400);
     return () => clearInterval(id);
-  }, [addFeed]);
+  }, [simActive, loteId, simTickMutate]);
 
-  /* alerta de fora-de-escopo (~7s) */
+  /* ----- alerta de fora-de-escopo (~7s) — cosmético ----- */
+  const [scopeVisible, setScopeVisible] = useState(false);
+  const [scopeSuggested, setScopeSuggested] = useState(false);
   useEffect(() => {
     const id = setTimeout(() => {
       setScopeVisible(true);
-      addFeed(
+      addLocalFeed(
         'sys',
         [bd('Escopo:'), s(' 4 holerites detectados — tipo não mapeado no plano (guardados em “_revisar”)')],
         true,
       );
     }, 7000);
     return () => clearTimeout(id);
-  }, [addFeed]);
+  }, [addLocalFeed]);
 
-  const queueDone = queueLeft <= 0;
-  const item = qi < QUEUE.length ? QUEUE[qi] : null;
+  /* ----- fila de validação ----- */
+  /* rascunho de correção é por documento — some sozinho quando a fila avança */
+  const [edit, setEdit] = useState<{ docId: number; draft: string } | null>(null);
+  const [decidedCount, setDecidedCount] = useState(0);
+  const [search, setSearch] = useState('');
+
+  const queueKnown = filaQ.data !== undefined;
+  const fila: QueueItem[] = (filaQ.data ?? []).map(toQueueItem);
+  const queueLeft = metQ.data?.fila ?? fila.length;
+  const queueDone = queueKnown && fila.length === 0;
+  const item = !queueDone && fila.length > 0 ? fila[0] : null;
+  const currentDocId = item?.documentoId ?? 0;
+  const editDraft = edit && edit.docId === currentDocId ? edit.draft : null;
+  const setEditDraft = (v: string | null) => {
+    if (v === null || !item) setEdit(null);
+    else setEdit({ docId: item.documentoId, draft: v });
+  };
 
   const resolveItem = (action: 'ok' | 'fix' | 'rej') => {
-    if (!item) return;
-    if (action === 'ok') {
-      const name = item.rnNew.length < 40 ? item.rnNew : item.file;
-      addFeed('me', [bd('Você'), s(' aprovou '), bd(name), s(' em 9s')]);
-    }
-    if (action === 'fix') {
-      addFeed('me', [
-        bd('Você'),
-        s(' corrigiu '),
-        bd(item.file),
-        s(' → feedback virou regra no contexto v7'),
-      ]);
-    }
-    if (action === 'rej') {
-      addFeed(
-        'me',
-        [bd('Você'), s(' pediu '), bd('2ª foto'), s(` de “${item.file}” — WhatsApp enviado ao Pedro`)],
-        true,
-      );
-    }
-    const nextLeft = Math.max(queueLeft - 1, 0);
-    setValidated((v) => v + 1);
-    setDocsDone((d) => d + 1);
-    setQueueLeft(nextLeft);
-    setEditDraft(null);
-    if (nextLeft === 0) {
-      addFeed('sys', [s('Fila de validação '), bd('zerada'), s(' · lote pronto para entrega')]);
-    }
-    setTimeout(() => setQi((i) => i + 1), 250);
-  };
-
-  const deliver = () => {
-    setDelivered(true);
-    addFeed(
-      'sys',
-      [
-        bd('Lote #482 entregue'),
-        s(' · Drive atualizado + WhatsApp enviado ao cliente · cobrança liberada após aprovação'),
-      ],
-      true,
+    if (!item || decidir.isPending) return;
+    const nomeFinalCorrigido = action === 'fix' ? (editDraft ?? item.rnNew) : undefined;
+    decidir.mutate(
+      {
+        documentoId: item.documentoId,
+        decisao: action === 'ok' ? 'aprovado' : action === 'fix' ? 'corrigido' : 'segunda_foto',
+        ...(nomeFinalCorrigido ? { nomeFinalCorrigido } : {}),
+        organizadorNome: 'Nizan Jhon',
+      },
+      {
+        onSuccess: () => {
+          setDecidedCount((c) => c + 1);
+          setEdit(null);
+        },
+      },
     );
   };
+
+  /* ----- entrega ----- */
+  const delivered = lote?.status === 'entregue' || lote?.status === 'aprovado';
+  const deliver = () => {
+    if (loteId > 0 && !entregar.isPending) entregar.mutate({ id: loteId });
+  };
+
+  /* ----- valores derivados (fallbacks da seed enquanto carrega) ----- */
+  const docsDone = metQ.data?.docsAjeitados ?? lote?.docsAjeitados ?? 79;
+  const totalDocs = metQ.data?.qtdArquivos ?? lote?.qtdArquivos ?? 86;
+  const autoPct = metQ.data?.autoAprovacaoPct ?? 87;
+  const custoDoc = metQ.data?.custoPorDoc ?? 0.04;
+  const tempoPct = lote?.tempoUsadoPct ?? 34;
+
+  const recebidoEm = asDate(lote?.recebidoEm);
+  const prazoEm = asDate(lote?.prazoEm);
+  const totalHoras =
+    recebidoEm && prazoEm ? Math.max((prazoEm.getTime() - recebidoEm.getTime()) / 36e5, 1) : 48;
+  const horasRestantes = Math.max(Math.floor((1 - tempoPct / 100) * totalHoras), 0);
+
+  const escopoIn = safeJson<string[]>(lote?.escopoInclui, [
+    'Docs de obra',
+    'Caixa de documentos',
+    '+ resumo de custo por apto',
+  ]);
+  const escopoOut = safeJson<string[]>(lote?.escopoFora, [
+    'holerites/folha',
+    'lançamento contábil',
+    'assinatura/parecer',
+  ]);
+
+  const ctxVersao = ctxQ.data?.versao ?? 7;
+  const ctxDocTypes = safeJson<string[]>(ctxQ.data?.docTypes, []).length || 7;
 
   const q = search.trim().toLowerCase();
   const visibleFeed = q ? feed.filter((it) => plain(it.segs).toLowerCase().includes(q)) : feed;
@@ -449,13 +509,34 @@ export default function Home() {
   const steps = [
     { lines: ['Recebido', '08h14'], state: 'done' as const },
     { lines: ['OCR', '34 escaneados'], state: 'done' as const },
-    { lines: ['IA classificou', '86/86'], state: 'done' as const },
+    { lines: ['IA classificou', `${totalDocs}/${totalDocs}`], state: 'done' as const },
     {
       lines: ['Validação', queueDone ? 'zerada ✓' : `${queueLeft} pendentes`],
       state: (queueDone ? 'done' : 'now') as 'done' | 'now',
     },
     { lines: ['Entrega', 'Drive + índice'], state: (delivered ? 'done' : 'todo') as 'done' | 'todo' },
   ];
+
+  /* ----- skeleton discreto no primeiro carregamento (erro → mantém estável) ----- */
+  if (!loteQ.data) {
+    return (
+      <div className="flex min-w-0 flex-col gap-[18px] px-[30px] pb-[60px] pt-6">
+        <Sk className="h-[62px] rounded-full" />
+        <Sk className="h-[240px] rounded-[20px]" />
+        <div className="grid grid-cols-2 gap-[14px] min-[1151px]:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <Sk key={i} className="h-[106px] rounded-2xl" />
+          ))}
+        </div>
+        <Sk className="h-[108px] rounded-[18px]" />
+        <Sk className="h-[150px] rounded-[18px]" />
+        <div className="grid grid-cols-1 items-start gap-4 min-[1151px]:grid-cols-[1fr_1.15fr]">
+          <Sk className="h-[430px] rounded-[18px]" />
+          <Sk className="h-[430px] rounded-[18px]" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-w-0 flex-col gap-[18px] px-[30px] pb-[60px] pt-6">
@@ -484,10 +565,11 @@ export default function Home() {
         <div className="flex flex-wrap items-center gap-[14px] border-b border-aj-border px-6 py-[18px]">
           <div>
             <div className="text-[20px] font-black tracking-[-0.01em]">
-              Lote #482 — Construtora Sol Nascente
+              Lote #{lote?.numero ?? LOTE_DEMO_NUMERO} — {cliente?.nome ?? 'Construtora Sol Nascente'}
             </div>
             <div className="text-[14px] font-extrabold text-aj-muted">
-              João Pessoa · PB · plano 3 agentes + 2 skills · R$ 1.450/mês
+              {cliente?.cidade ?? 'João Pessoa · PB'} · plano {cliente?.planoAgentes ?? 3} agentes +{' '}
+              {cliente?.planoSkills ?? 2} skills · {fmtPreco(cliente?.precoMensal ?? 1450)}
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -508,14 +590,16 @@ export default function Home() {
               📥 Solicitado
             </div>
             <div className="rounded-[0_10px_10px_0] border-l-[3px] border-aj-orange bg-aj-cream px-[13px] py-[10px] text-[13.5px] font-bold leading-[1.5] text-aj-muted">
-              “Organiza as notas e os contratos da obra Litoral Plaza e monta o resumo de custo por
-              apartamento.”
+              {lote?.solicitadoTexto ??
+                '“Organiza as notas e os contratos da obra Litoral Plaza e monta o resumo de custo por apartamento.”'}
               <small className="mt-[6px] block text-[11.5px] font-extrabold text-aj-faint">
-                recebido pelo WhatsApp · sáb 16/08, 08h14 · 86 arquivos
+                recebido pelo {CANAL[lote?.canal ?? 'whatsapp'] ?? 'WhatsApp'} ·{' '}
+                {recebidoEm ? fmtDiaHora(recebidoEm) : 'sáb 16/08, 08h14'} · {totalDocs} arquivos
               </small>
             </div>
             <div className="mt-[10px] text-[12.5px] font-bold text-aj-faint">
-              Contexto do cliente: <b className="text-aj-ink">v7</b> · 7 tipos de doc mapeados
+              Contexto do cliente: <b className="text-aj-ink">v{ctxVersao}</b> · {ctxDocTypes} tipos de
+              doc mapeados
             </div>
           </div>
 
@@ -524,19 +608,22 @@ export default function Home() {
               ⏱ Prazo
             </div>
             <div className="text-[14.5px] font-extrabold leading-[1.5]">
-              Entrega: <span className="text-aj-orange">seg 18/08, 08h14</span>
+              Entrega:{' '}
+              <span className="text-aj-orange">
+                {prazoEm ? fmtDiaHora(prazoEm) : 'seg 18/08, 08h14'}
+              </span>
             </div>
             <div className="mb-[6px] mt-2 h-[10px] overflow-hidden rounded-full bg-aj-rail">
               <motion.i
                 className="block h-full rounded-full bg-[linear-gradient(90deg,#2FC79E,#F5820D)]"
                 initial={{ width: '0%' }}
-                animate={{ width: '34%' }}
+                animate={{ width: `${tempoPct}%` }}
                 transition={{ duration: 0.8, ease: 'easeOut' }}
               />
             </div>
             <div className="flex justify-between text-[12px] font-extrabold text-aj-faint">
-              <span>34% do tempo usado</span>
-              <span>31h restantes</span>
+              <span>{tempoPct}% do tempo usado</span>
+              <span>{horasRestantes}h restantes</span>
             </div>
             <div className="mt-2 text-[12.5px] font-black text-aj-teal-dark">
               {delivered ? 'Entregue com 19h de antecedência ✓' : '63% do trabalho feito → adiantado ✓'}
@@ -548,26 +635,33 @@ export default function Home() {
               🎯 Escopo contratado
             </div>
             <div className="mb-2">
-              <span className="mb-[5px] mr-[5px] inline-flex rounded-full border border-[rgba(47,199,158,.4)] bg-aj-teal-soft px-[11px] py-1 text-[12px] font-extrabold text-aj-teal-dark">
-                Docs de obra
-              </span>
-              <span className="mb-[5px] mr-[5px] inline-flex rounded-full border border-[rgba(47,199,158,.4)] bg-aj-teal-soft px-[11px] py-1 text-[12px] font-extrabold text-aj-teal-dark">
-                Caixa de documentos
-              </span>
-              <span className="mb-[5px] mr-[5px] inline-flex rounded-full border border-aj-border bg-aj-cream px-[11px] py-1 text-[12px] font-extrabold text-aj-muted">
-                + resumo de custo por apto
-              </span>
+              {escopoIn.map((chip) =>
+                chip.startsWith('+') ? (
+                  <span
+                    key={chip}
+                    className="mb-[5px] mr-[5px] inline-flex rounded-full border border-aj-border bg-aj-cream px-[11px] py-1 text-[12px] font-extrabold text-aj-muted"
+                  >
+                    {chip}
+                  </span>
+                ) : (
+                  <span
+                    key={chip}
+                    className="mb-[5px] mr-[5px] inline-flex rounded-full border border-[rgba(47,199,158,.4)] bg-aj-teal-soft px-[11px] py-1 text-[12px] font-extrabold text-aj-teal-dark"
+                  >
+                    {chip}
+                  </span>
+                ),
+              )}
             </div>
             <div>
-              <span className="mb-[5px] mr-[5px] inline-flex rounded-full border border-dashed border-aj-border bg-aj-chipout px-[11px] py-1 text-[12px] font-extrabold text-aj-faint">
-                fora: holerites/folha
-              </span>
-              <span className="mb-[5px] mr-[5px] inline-flex rounded-full border border-dashed border-aj-border bg-aj-chipout px-[11px] py-1 text-[12px] font-extrabold text-aj-faint">
-                fora: lançamento contábil
-              </span>
-              <span className="mb-[5px] mr-[5px] inline-flex rounded-full border border-dashed border-aj-border bg-aj-chipout px-[11px] py-1 text-[12px] font-extrabold text-aj-faint">
-                fora: assinatura/parecer
-              </span>
+              {escopoOut.map((chip) => (
+                <span
+                  key={chip}
+                  className="mb-[5px] mr-[5px] inline-flex rounded-full border border-dashed border-aj-border bg-aj-chipout px-[11px] py-1 text-[12px] font-extrabold text-aj-faint"
+                >
+                  fora: {chip}
+                </span>
+              ))}
             </div>
           </div>
         </div>
@@ -591,7 +685,7 @@ export default function Home() {
                 disabled={scopeSuggested}
                 onClick={() => {
                   setScopeSuggested(true);
-                  addFeed('me', [
+                  addLocalFeed('me', [
                     bd('Você'),
                     s(' sugeriu o add-on '),
                     bd('Docs de pessoas (+R$160/mês)'),
@@ -615,11 +709,11 @@ export default function Home() {
             value: (
               <>
                 <CountUp value={docsDone} />
-                <span className="text-[16px] text-aj-faint">/86</span>
+                <span className="text-[16px] text-aj-faint">/{totalDocs}</span>
               </>
             ),
             delta: delivered
-              ? '86/86 entregues · pasta + índice no Drive'
+              ? `${totalDocs}/${totalDocs} entregues · pasta + índice no Drive`
               : 'pipeline IA concluído · faltam validações',
             up: true,
           },
@@ -631,13 +725,13 @@ export default function Home() {
           },
           {
             label: 'Auto-aprovação',
-            value: <CountUp value={87} format={(n) => `${Math.round(n)}%`} />,
+            value: <CountUp value={autoPct} format={(n) => `${Math.round(n)}%`} />,
             delta: 'threshold 0,90 · concordância 97,2%',
             up: true,
           },
           {
             label: 'Custo por doc',
-            value: <CountUp value={0.04} format={(n) => `R$ ${n.toFixed(2).replace('.', ',')}`} />,
+            value: <CountUp value={custoDoc} format={(n) => `R$ ${n.toFixed(2).replace('.', ',')}`} />,
             delta: 'OCR R$ 1,36 + tokens R$ 2,10',
             up: true,
           },
@@ -805,13 +899,20 @@ export default function Home() {
                       <Txt segs={it.segs} />
                     </div>
                     <div className="mt-[2px] text-[11px] font-extrabold text-aj-faint [font-variant-numeric:tabular-nums]">
-                      14h{String(it.minute).padStart(2, '0')} · registrado no audit trail
+                      {it.time} · registrado no audit trail
                     </div>
                   </div>
                 </motion.div>
               ))}
             </AnimatePresence>
-            {visibleFeed.length === 0 && (
+            {visibleFeed.length === 0 && !q && (
+              <div className="flex flex-col gap-[10px] py-1">
+                <Sk className="h-[52px] rounded-xl" />
+                <Sk className="h-[52px] rounded-xl" />
+                <Sk className="h-[52px] rounded-xl" />
+              </div>
+            )}
+            {visibleFeed.length === 0 && q && (
               <div className="py-6 text-center text-[12.5px] font-bold text-aj-faint">
                 Nada no log com “{search}”.
               </div>
@@ -823,14 +924,24 @@ export default function Home() {
         <div className="flex flex-col gap-[14px] rounded-[18px] border border-aj-border bg-white px-[22px] py-5">
           <div className="flex items-center gap-[10px]">
             <div className="text-[15.5px] font-black">Fila de validação</div>
-            {!queueDone && <Pill tone="orange">{`item ${qi + 1} de ${QUEUE.length}`}</Pill>}
+            {!queueDone && item && (
+              <Pill tone="orange">{`item ${decidedCount + 1} de ${decidedCount + fila.length}`}</Pill>
+            )}
             <span className="ml-auto text-[12px] font-extrabold text-aj-faint">meta ≤ 15s/doc</span>
           </div>
 
+          {!queueKnown && (
+            <div className="flex flex-col gap-[14px]">
+              <Sk className="h-[196px] rounded-[14px]" />
+              <Sk className="h-[74px] rounded-[11px]" />
+              <Sk className="h-[46px] rounded-full" />
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
-            {!queueDone && item && (
+            {queueKnown && !queueDone && item && (
               <motion.div
-                key={qi}
+                key={item.documentoId}
                 initial={{ opacity: 0, x: 24 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0 }}
@@ -911,24 +1022,27 @@ export default function Home() {
                     <motion.button
                       type="button"
                       whileTap={{ scale: 0.96 }}
+                      disabled={decidir.isPending}
                       onClick={() => resolveItem('ok')}
-                      className="flex-1 cursor-pointer rounded-full border-none bg-aj-teal px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-white transition-colors duration-150 hover:bg-aj-teal-hover"
+                      className="flex-1 cursor-pointer rounded-full border-none bg-aj-teal px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-white transition-colors duration-150 hover:bg-aj-teal-hover disabled:cursor-default disabled:opacity-70"
                     >
                       ✓ Aprovar
                     </motion.button>
                     <motion.button
                       type="button"
                       whileTap={{ scale: 0.96 }}
+                      disabled={decidir.isPending}
                       onClick={() => setEditDraft(item.rnNew)}
-                      className="flex-1 cursor-pointer rounded-full border-[1.5px] border-aj-border bg-white px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-aj-ink transition-colors duration-150 hover:border-aj-ink"
+                      className="flex-1 cursor-pointer rounded-full border-[1.5px] border-aj-border bg-white px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-aj-ink transition-colors duration-150 hover:border-aj-ink disabled:cursor-default disabled:opacity-70"
                     >
                       ✎ Corrigir
                     </motion.button>
                     <motion.button
                       type="button"
                       whileTap={{ scale: 0.96 }}
+                      disabled={decidir.isPending}
                       onClick={() => resolveItem('rej')}
-                      className="flex-1 cursor-pointer rounded-full border-[1.5px] border-aj-danger bg-white px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-aj-danger transition-colors duration-150"
+                      className="flex-1 cursor-pointer rounded-full border-[1.5px] border-aj-danger bg-white px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-aj-danger transition-colors duration-150 disabled:cursor-default disabled:opacity-70"
                     >
                       ✕ 2ª foto
                     </motion.button>
@@ -938,8 +1052,9 @@ export default function Home() {
                     <motion.button
                       type="button"
                       whileTap={{ scale: 0.96 }}
+                      disabled={decidir.isPending}
                       onClick={() => resolveItem('fix')}
-                      className="flex-1 cursor-pointer rounded-full border-none bg-aj-orange px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-white transition-colors duration-150 hover:bg-aj-orange-hover"
+                      className="flex-1 cursor-pointer rounded-full border-none bg-aj-orange px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-white transition-colors duration-150 hover:bg-aj-orange-hover disabled:cursor-default disabled:opacity-70"
                     >
                       ✓ Confirmar correção
                     </motion.button>
@@ -969,7 +1084,7 @@ export default function Home() {
               <motion.button
                 type="button"
                 whileTap={{ scale: 0.97 }}
-                disabled={delivered}
+                disabled={delivered || entregar.isPending}
                 onClick={deliver}
                 className="cursor-pointer rounded-full border-none bg-aj-orange px-[18px] py-[13px] font-[inherit] text-[14px] font-black text-white transition-colors duration-150 hover:bg-aj-orange-hover disabled:cursor-default disabled:opacity-80"
               >

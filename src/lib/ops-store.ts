@@ -1,30 +1,31 @@
-import { useSyncExternalStore } from 'react';
+import { trpc } from '@/providers/trpc';
 
 /**
- * Mini store compartilhado do console ops.
- * A fila de validação (home) publica; a OpsSidebar consome
- * (badge da nav + quota do rodapé).
+ * Estado compartilhado do console ops — wrapper sobre o backend tRPC.
+ * A OpsSidebar consome (badge da fila na nav + quota do rodapé);
+ * os dados vêm de `metricas.ops` do lote demo (#482), com polling.
+ * Enquanto o backend não responde (loading/erro), devolve o fallback
+ * da seed para manter a UI estável.
  */
 export type OpsState = {
   queueLeft: number;
   validatedToday: number;
 };
 
-let state: OpsState = { queueLeft: 5, validatedToday: 187 };
-const listeners = new Set<() => void>();
+export const LOTE_DEMO_NUMERO = 482;
 
-export function setOpsState(patch: Partial<OpsState>) {
-  state = { ...state, ...patch };
-  listeners.forEach((l) => l());
-}
-
-function subscribe(cb: () => void) {
-  listeners.add(cb);
-  return () => {
-    listeners.delete(cb);
-  };
-}
+const FALLBACK: OpsState = { queueLeft: 5, validatedToday: 187 };
 
 export function useOpsState(): OpsState {
-  return useSyncExternalStore(subscribe, () => state);
+  const loteQ = trpc.lotes.porNumero.useQuery(
+    { numero: LOTE_DEMO_NUMERO },
+    { refetchInterval: 3000, retry: 1 },
+  );
+  const loteId = loteQ.data?.lote.id ?? 0;
+  const metQ = trpc.metricas.ops.useQuery(
+    { loteId },
+    { enabled: loteId > 0, refetchInterval: 3000, retry: 1 },
+  );
+  if (!metQ.data) return FALLBACK;
+  return { queueLeft: metQ.data.fila, validatedToday: metQ.data.validadosHoje };
 }
