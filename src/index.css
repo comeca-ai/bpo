@@ -4,6 +4,20 @@
 
 @layer base {
   :root {
+    /* Ajeita brand tokens (design.md — aprovados, usar exatamente) */
+    --orange: #F5820D;
+    --orange-hover: #E0740A;
+    --teal: #2FC79E;
+    --cream: #FBF6EE;
+    --dark: #2E2721;
+    --ink: #2E2721;
+    --faint: #A08A6B;
+    --active-bg: #FFF4E6;
+    --teal-soft: #E7F8F2;
+    --danger: #D9534F;
+    --danger-soft: #FBEBEA;
+    --whatsapp: #25D366;
+
     --background: 0 0% 100%;
     --foreground: 240 10% 3.9%;
     --card: 0 0% 100%;
@@ -70,6 +84,6 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-aj-cream text-aj-ink font-sans antialiased;
   }
 }
