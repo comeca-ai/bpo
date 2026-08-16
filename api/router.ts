@@ -83,8 +83,8 @@ export const appRouter = createRouter({
 
   propostas: createRouter({
     estruturar: publicQuery
-      .input(z.object({ descricao: z.string(), temAudio: z.boolean().default(false) }))
-      .mutation(({ input }) => estruturarProposta(input.descricao, input.temAudio)),
+      .input(z.object({ descricao: z.string(), temAudio: z.boolean().default(false), audioBase64: z.string().nullish() }))
+      .mutation(({ input }) => estruturarProposta(input.descricao, input.temAudio, input.audioBase64)),
     criar: publicQuery
       .input(
         z.object({

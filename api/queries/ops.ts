@@ -206,6 +206,7 @@ export type Combinado = {
   precoPiso: number;
   precoTeto: number;
   motivoPreco: string;
+  transcricao?: string; // texto que a Deepgram ouviu no áudio (quando houver)
 };
 
 /** Extrai volume de arquivos do texto ("86 notas", "120 docs", "40 contratos") */
@@ -240,11 +241,56 @@ function motivoPrecoTexto(volume: number, agentes: number, sla: string): string 
   return `sem o volume exato, a gente abre com ${agentes} agentes e uma margem maior — o número fecha na primeira leva`;
 }
 
-/** SIMULAÇÃO da IA — heurística TS que estrutura o pedido em um "combinado" */
-export function estruturarProposta(descricao: string, temAudio: boolean): Combinado {
-  const texto = descricao.trim();
+/** Transcrição real via Deepgram (nova-2, pt-BR). Sem chave → retorna "" (modo simulação). */
+export async function transcreverAudioDeepgram(audioBase64: string): Promise<string> {
+  const apiKey = process.env.DEEPGRAM_API_KEY;
+  if (!apiKey || !audioBase64) return "";
+  const mime = audioBase64.match(/^data:([^;]+)/)?.[1] ?? "audio/webm";
+  const buffer = Buffer.from(audioBase64.replace(/^data:[^;]+;base64,/, ""), "base64");
+  if (buffer.length === 0) return "";
+  const ouvir = (url: string) =>
+    fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Token ${apiKey}`, "Content-Type": mime },
+      body: buffer,
+    });
+  const res = await ouvir(
+    "https://api.deepgram.com/v1/listen?model=nova-2&language=pt-BR&smart_format=true&punctuate=true"
+  );
+  if (!res.ok) throw new Error(`Deepgram respondeu ${res.status}`);
+  const data = (await res.json()) as {
+    results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> };
+  };
+  let texto = data?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+  // fallback: se pt-BR não achar nada (sotaque/ruído), tenta com detecção automática
+  if (!texto) {
+    const res2 = await ouvir(
+      "https://api.deepgram.com/v1/listen?model=nova-2&detect_language=true&smart_format=true&punctuate=true"
+    );
+    if (res2.ok) {
+      const d2 = (await res2.json()) as {
+        results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> };
+      };
+      texto = d2?.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() ?? "";
+    }
+  }
+  return texto;
+}
 
-  // Áudio sem texto: estrutura genérica aguardando transcrição
+/** Estrutura o pedido em um "combinado". Áudio é transcrito de verdade quando há DEEPGRAM_API_KEY. */
+export async function estruturarProposta(
+  descricao: string,
+  temAudio: boolean,
+  audioBase64?: string | null
+): Promise<Combinado> {
+  let texto = descricao.trim();
+  let transcricao = "";
+  if (audioBase64) {
+    transcricao = await transcreverAudioDeepgram(audioBase64);
+    if (transcricao) texto = texto ? `${texto}\n\n${transcricao}` : transcricao;
+  }
+
+  // Áudio ainda sem texto (transcrição indisponível/falhou): estrutura genérica
   if (temAudio && texto.length === 0) {
     return {
       escopo: ["Organização documental (a transcrever do áudio)"],
@@ -331,6 +377,7 @@ export function estruturarProposta(descricao: string, temAudio: boolean): Combin
   const motivoPreco = motivoPrecoTexto(volume, agentesSugeridos, sla);
 
   return {
+    ...(transcricao ? { transcricao } : {}),
     escopo,
     sla,
     entrega,

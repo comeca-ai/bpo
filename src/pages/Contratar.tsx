@@ -79,7 +79,7 @@ type Mutacao<I, O> = {
 type PropostasApi = {
   propostas: {
     estruturar: {
-      useMutation: () => Mutacao<{ descricao: string; temAudio: boolean }, unknown>;
+      useMutation: () => Mutacao<{ descricao: string; temAudio: boolean; audioBase64?: string | null }, unknown>;
     };
     criar: { useMutation: () => Mutacao<Record<string, unknown>, unknown> };
   };
@@ -329,6 +329,7 @@ export default function Contratar() {
 
   /* Fluxo */
   const [fase, setFase] = useState<Fase>("contar");
+  const [transcricao, setTranscricao] = useState<string | null>(null);
   const [combinado, setCombinado] = useState<Combinado | null>(null);
   const [usouFallback, setUsouFallback] = useState(false);
   const [formErro, setFormErro] = useState<string | null>(null);
@@ -346,9 +347,7 @@ export default function Contratar() {
   }, []);
 
   const montarDescricao = () => {
-    const partes = [descricao.trim()];
-    if (audio) partes.push("[áudio anexado pelo cliente — nosso time transcreve e estrutura]");
-    return partes.filter(Boolean).join("\n");
+    return descricao.trim();
   };
 
   async function iniciarGravacao() {
@@ -411,16 +410,21 @@ export default function Contratar() {
 
   function estruturar() {
     const desc = montarDescricao();
-    if (!desc) {
+    if (!desc && !audio) {
       setFormErro("Descreva o trabalho ou mande um áudio — a gente propõe o combinado a partir daí.");
       return;
     }
     setFormErro(null);
     estruturarMut.mutate(
-      { descricao: desc, temAudio: Boolean(audio) },
+      { descricao: desc, temAudio: Boolean(audio), audioBase64: audio?.dataUrl ?? null },
       {
         onSuccess: (raw) => {
-          const c = normalizeCombinado(raw, desc);
+          const tr = (raw as { transcricao?: string } | null)?.transcricao;
+          if (tr) {
+            setTranscricao(tr);
+            setDescricao((prev) => (prev.trim() ? prev : tr));
+          }
+          const c = normalizeCombinado(raw, desc || tr || "");
           if (c) {
             setCombinado(c);
             setUsouFallback(false);
@@ -663,7 +667,9 @@ export default function Contratar() {
                 >
                   {estruturarMut.isPending && <Loader2 className="h-5 w-5 animate-spin" />}
                   {estruturarMut.isPending
-                    ? "Montando a proposta…"
+                    ? audio
+                      ? "🎙️ Transcrevendo seu áudio e montando a proposta…"
+                      : "Montando a proposta…"
                     : "Ver a proposta da Ajeita →"}
                 </motion.button>
               </section>
@@ -682,6 +688,18 @@ export default function Contratar() {
           )}
 
           {fase === "proposta" && combinado && (
+        <>
+          {transcricao && (
+            <div className="mx-auto w-full max-w-3xl rounded-[14px] border border-aj-teal/40 bg-aj-teal-soft p-4 text-left">
+              <div className="text-[11px] font-black uppercase tracking-[.08em] text-[#1B8F6F]">
+                🎙️ Ouvimos do seu áudio
+              </div>
+              <div className="mt-1 text-sm font-bold leading-relaxed text-aj-ink">
+                “{transcricao}”
+              </div>
+            </div>
+          )}
+        
             <motion.div
               key="proposta"
               initial={{ opacity: 0, y: 16 }}
@@ -891,6 +909,7 @@ export default function Contratar() {
                 </motion.section>
               )}
             </motion.div>
+        </>
           )}
         </AnimatePresence>
       </main>
