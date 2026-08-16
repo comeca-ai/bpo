@@ -10,9 +10,14 @@ import {
   filaValidacao,
   getLote,
   getLotePorNumero,
+  aceitarProposta,
+  criarProposta,
+  estruturarProposta,
   listClientes,
   listLotes,
+  listPropostas,
   metricasOps,
+  recusarProposta,
   simTick,
 } from "./queries/ops";
 
@@ -74,6 +79,34 @@ export const appRouter = createRouter({
 
   sim: createRouter({
     tick: publicQuery.input(z.object({ loteId: z.number() })).mutation(({ input }) => simTick(input.loteId)),
+  }),
+
+  propostas: createRouter({
+    estruturar: publicQuery
+      .input(z.object({ descricao: z.string(), temAudio: z.boolean() }))
+      .mutation(({ input }) => estruturarProposta(input.descricao, input.temAudio)),
+    criar: publicQuery
+      .input(
+        z.object({
+          nome: z.string().min(1),
+          empresa: z.string().min(1),
+          whatsapp: z.string().min(1),
+          descricao: z.string().default(""),
+          combinadoJson: z.string(),
+          agentes: z.number().int().min(1).default(2),
+          skills: z.number().int().min(0).default(1),
+          precoMensal: z.number().int().min(0).default(990),
+          temAudio: z.boolean().default(false),
+        })
+      )
+      .mutation(({ input }) => criarProposta(input)),
+    list: publicQuery.query(() => listPropostas()),
+    aceitar: publicQuery
+      .input(z.object({ id: z.number() }))
+      .mutation(({ input }) => aceitarProposta(input.id)),
+    recusar: publicQuery
+      .input(z.object({ id: z.number(), motivo: z.string().default("") }))
+      .mutation(({ input }) => recusarProposta(input.id, input.motivo)),
   }),
 });
 
