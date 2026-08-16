@@ -305,7 +305,6 @@ export function estruturarProposta(descricao: string, temAudio: boolean): Combin
   // ── Entrega ──
   const canais: string[] = [];
   if (/whats(?:app)?/.test(lower)) canais.push("WhatsApp");
-  if (/drive/.test(lower)) canais.push("pasta no Drive");
   if (/e-?mail/.test(lower)) canais.push("e-mail");
   const entrega =
     canais.length > 0
