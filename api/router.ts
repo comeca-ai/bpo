@@ -83,7 +83,7 @@ export const appRouter = createRouter({
 
   propostas: createRouter({
     estruturar: publicQuery
-      .input(z.object({ descricao: z.string(), temAudio: z.boolean() }))
+      .input(z.object({ descricao: z.string(), temAudio: z.boolean().default(false) }))
       .mutation(({ input }) => estruturarProposta(input.descricao, input.temAudio)),
     criar: publicQuery
       .input(
@@ -92,7 +92,7 @@ export const appRouter = createRouter({
           empresa: z.string().min(1),
           whatsapp: z.string().min(1),
           descricao: z.string().default(""),
-          combinadoJson: z.string(),
+          combinado: z.any(),
           agentes: z.number().int().min(1).default(2),
           skills: z.number().int().min(0).default(1),
           precoMensal: z.number().int().min(0).default(990),

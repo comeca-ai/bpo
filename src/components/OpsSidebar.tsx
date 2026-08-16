@@ -68,8 +68,8 @@ export default function OpsSidebar() {
   const nav: NavEntry[] = [
     {
       label: 'Lote em trabalho',
-      to: '/',
-      active: pathname === '/' || pathname === '/ops',
+      to: '/ops',
+      active: pathname === '/ops',
       badge: queueLeft,
     },
     { label: 'Lotes', to: '/lotes', active: pathname.startsWith('/lotes') },
@@ -81,7 +81,7 @@ export default function OpsSidebar() {
   return (
     <aside className="sticky top-0 flex h-[100dvh] w-[238px] shrink-0 flex-col gap-2 bg-aj-dark px-[18px] py-[26px] text-aj-cream">
       <div>
-        <Link to="/" className="inline-block no-underline">
+        <Link to="/ops" className="inline-block no-underline">
           <LogoTick variant="light" />
         </Link>
       </div>

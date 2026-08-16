@@ -289,11 +289,12 @@ export async function criarProposta(input: {
   empresa: string;
   whatsapp: string;
   descricao: string;
-  combinadoJson: string;
+  combinado: unknown;
   agentes: number;
   skills: number;
   precoMensal: number;
-  temAudio: boolean;
+  temAudio?: boolean;
+  audioBase64?: string | null;
 }) {
   const db = getDb();
 
@@ -313,7 +314,9 @@ export async function criarProposta(input: {
     .from(lotes);
   const numero = (maxRow?.maxNum ?? 0) + 1;
 
-  const combinado = safeParseCombinado(input.combinadoJson);
+  const combinadoJson = typeof input.combinado === "string" ? input.combinado : JSON.stringify(input.combinado ?? {});
+  const combinado = safeParseCombinado(combinadoJson);
+  const temAudio = input.temAudio ?? Boolean(input.audioBase64);
   const volume = extrairVolume(input.descricao);
   const prazoEm = new Date(Date.now() + 48 * 36e5);
   const tituloBase = input.descricao.trim().replace(/\s+/g, " ");
@@ -332,8 +335,8 @@ export async function criarProposta(input: {
     escopoInclui: JSON.stringify(combinado.escopo),
     escopoFora: JSON.stringify(combinado.foraDeEscopo),
     clienteContato: `${input.nome} · ${input.whatsapp}`,
-    combinado: input.combinadoJson,
-    propostaOrigem: input.temAudio ? "audio" : "texto",
+    combinado: combinadoJson,
+    propostaOrigem: temAudio ? "audio" : "texto",
     docsAjeitados: 0,
     tempoUsadoPct: 0,
     prazoEm,

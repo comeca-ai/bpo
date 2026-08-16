@@ -236,7 +236,7 @@ export default function Lotes() {
     { label: 'SLA em dia', value: <CountUp value={100} format={(n) => `${Math.round(n)}%`} />, delta: '0 lotes atrasados na semana', tone: 'green' as const },
   ];
 
-  const openLote = () => navigate('/');
+  const openLote = () => navigate('/ops');
 
   return (
     <div className="flex min-w-0 flex-col gap-[18px] px-[30px] pb-[60px] pt-6">

@@ -176,8 +176,8 @@ function normalizeCombinado(raw: unknown): Combinado | null {
     escopo,
     prazo: typeof r.prazo === "string" && r.prazo.trim() ? r.prazo : local.prazo,
     sla: typeof r.sla === "string" && r.sla.trim() ? r.sla : local.sla,
-    comoRecebe: asStringArray(r.comoRecebe).length ? asStringArray(r.comoRecebe) : local.comoRecebe,
-    comoValida: asStringArray(r.comoValida).length ? asStringArray(r.comoValida) : local.comoValida,
+    comoRecebe: asStringArray(r.comoRecebe).length ? asStringArray(r.comoRecebe) : (typeof r.entrega === "string" && r.entrega.trim() ? [r.entrega] : local.comoRecebe),
+    comoValida: asStringArray(r.comoValida).length ? asStringArray(r.comoValida) : (typeof r.validacao === "string" && r.validacao.trim() ? [r.validacao] : local.comoValida),
     foraDeEscopo: asStringArray(r.foraDeEscopo ?? r.naoEntra).length
       ? asStringArray(r.foraDeEscopo ?? r.naoEntra)
       : local.foraDeEscopo,
@@ -329,7 +329,7 @@ export default function Contratar() {
     }
     setFormErro(null);
     estruturarMut.mutate(
-      { descricao: desc },
+      { descricao: desc, temAudio: Boolean(audio) },
       {
         onSuccess: (raw) => {
           const c = normalizeCombinado(raw);
