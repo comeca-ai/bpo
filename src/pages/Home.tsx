@@ -87,8 +87,12 @@ const CANAL: Record<string, string> = {
   upload: 'Upload',
 };
 
+function fmtNum(n: number) {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
 function fmtPreco(n: number) {
-  return `R$ ${String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.')}/mês`;
+  return `R$ ${fmtNum(n)}/mês`;
 }
 
 /* ---------- fila de validação (shape do backend → UI) ---------- */
@@ -339,6 +343,10 @@ type CombinadoUI = {
   entrega: string;
   validacao: string;
   foraDeEscopo: string[];
+  agentesSugeridos?: number;
+  precoPiso?: number;
+  precoTeto?: number;
+  motivoPreco?: string;
 };
 
 const COMBINADO_FALLBACK: CombinadoUI = { escopo: [], sla: '', entrega: '', validacao: '', foraDeEscopo: [] };
@@ -416,7 +424,12 @@ function PropostasCard() {
                   </div>
                   <div className="ml-auto flex items-center gap-[9px]">
                     <span className="text-[14px] font-black text-aj-ink [font-variant-numeric:tabular-nums]">
-                      {fmtPreco(p.precoMensal)}
+                      {typeof c.precoPiso === 'number' &&
+                      c.precoPiso > 0 &&
+                      typeof c.precoTeto === 'number' &&
+                      c.precoTeto > 0
+                        ? `R$ ${fmtNum(c.precoPiso)}–${fmtNum(c.precoTeto)}/mês`
+                        : fmtPreco(p.precoMensal)}
                     </span>
                     <motion.button
                       type="button"

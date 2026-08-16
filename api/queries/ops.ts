@@ -201,12 +201,43 @@ export type Combinado = {
   entrega: string;
   validacao: string;
   foraDeEscopo: string[];
+  agentesSugeridos: number;
+  skillsDetectadas: number;
+  precoPiso: number;
+  precoTeto: number;
+  motivoPreco: string;
 };
 
 /** Extrai volume de arquivos do texto ("86 notas", "120 docs", "40 contratos") */
 export function extrairVolume(texto: string): number {
   const m = texto.match(/(\d{1,5})\s*(notas?(?:\s+fiscais)?|docs?|documentos?|contratos?|arquivos?|recibos?|boletos?|fotos?|comprovantes?|holerites?|laudos?)/i);
   return m ? parseInt(m[1], 10) : 0;
+}
+
+/** Heurística de agentes por volume de documentos */
+export function agentesPorVolume(volume: number): number {
+  if (volume <= 0) return 2; // volume não mencionado
+  if (volume <= 500) return 1;
+  if (volume <= 2000) return 2;
+  if (volume <= 5000) return 3;
+  if (volume <= 10000) return 4;
+  return 5;
+}
+
+/** Faixa de preço piso–teto a partir de agentes/skills/SLA/volume */
+export function faixaPreco(agentes: number, skills: number, sla: string, volume: number) {
+  const urgente = /24h.*urgente/i.test(sla);
+  const base = 230 + agentes * 300 + Math.max(1, skills) * 160;
+  const teto = Math.round(base * (urgente ? 1.75 : volume === 0 ? 1.6 : 1.45));
+  return { piso: base, teto };
+}
+
+function motivoPrecoTexto(volume: number, agentes: number, sla: string): string {
+  if (volume > 0) {
+    const prazoCurto = sla.replace(/^entrega\s+(em\s+|até\s+)?/i, "");
+    return `${volume} docs em ${prazoCurto} dão ${agentes} ${agentes === 1 ? "agente" : "agentes"} tranquilo; se a bagunça for pior que o contado, sobe pro teto`;
+  }
+  return `sem o volume exato, a gente abre com ${agentes} agentes e uma margem maior — o número fecha na primeira leva`;
 }
 
 /** SIMULAÇÃO da IA — heurística TS que estrutura o pedido em um "combinado" */
@@ -221,6 +252,11 @@ export function estruturarProposta(descricao: string, temAudio: boolean): Combin
       entrega: "a transcrever do áudio",
       validacao: "a transcrever do áudio",
       foraDeEscopo: ["a transcrever"],
+      agentesSugeridos: 2,
+      skillsDetectadas: 1,
+      precoPiso: 830,
+      precoTeto: 1490,
+      motivoPreco: "vamos fechar o número exato depois de transcrever seu áudio",
     };
   }
 
@@ -228,6 +264,7 @@ export function estruturarProposta(descricao: string, temAudio: boolean): Combin
 
   // ── Escopo: tipos de documento mencionados ──
   const escopo: string[] = [];
+  let skillsDetectadas = 0;
   const tipos: Array<[RegExp, string]> = [
     [/notas?(?:\s+fiscais)?|\bnf\b/, "Notas fiscais"],
     [/contratos?/, "Contratos"],
@@ -240,8 +277,15 @@ export function estruturarProposta(descricao: string, temAudio: boolean): Combin
     [/di[aá]rio(?:\s+de\s+obra)?/, "Diário de obra"],
     [/fotos?|imagens?/, "Fotos e imagens"],
   ];
-  for (const [re, label] of tipos) if (re.test(lower)) escopo.push(label);
-  if (escopo.length === 0) escopo.push("Caixa de documentos");
+  for (const [re, label] of tipos)
+    if (re.test(lower)) {
+      escopo.push(label);
+      skillsDetectadas++;
+    }
+  if (escopo.length === 0) {
+    escopo.push("Caixa de documentos");
+    skillsDetectadas = 1;
+  }
   if (/resumo|relat[oó]rio|consolidado/.test(lower)) escopo.push("+ resumo consolidado");
   if (/planilha|controle/.test(lower)) escopo.push("+ planilha de controle");
 
@@ -281,7 +325,24 @@ export function estruturarProposta(descricao: string, temAudio: boolean): Combin
   if (!/cont[aá]bil|contador|lançamento/.test(lower)) foraDeEscopo.push("lançamento contábil");
   if (!/assinatura|parecer|jur[ií]dico/.test(lower)) foraDeEscopo.push("assinatura/parecer");
 
-  return { escopo, sla, entrega, validacao, foraDeEscopo };
+  // ── Proposta: agentes sugeridos + faixa de preço (piso–teto) ──
+  const volume = extrairVolume(texto);
+  const agentesSugeridos = agentesPorVolume(volume);
+  const { piso: precoPiso, teto: precoTeto } = faixaPreco(agentesSugeridos, skillsDetectadas, sla, volume);
+  const motivoPreco = motivoPrecoTexto(volume, agentesSugeridos, sla);
+
+  return {
+    escopo,
+    sla,
+    entrega,
+    validacao,
+    foraDeEscopo,
+    agentesSugeridos,
+    skillsDetectadas,
+    precoPiso,
+    precoTeto,
+    motivoPreco,
+  };
 }
 
 export async function criarProposta(input: {
@@ -345,24 +406,40 @@ export async function criarProposta(input: {
   return { ok: true, loteId: Number(insLote.insertId), numero, clienteId };
 }
 
+function numOu(v: unknown, fallback: number): number {
+  const n = typeof v === "string" ? parseInt(v, 10) : typeof v === "number" ? v : NaN;
+  return Number.isFinite(n) ? Math.round(n) : fallback;
+}
+
 function safeParseCombinado(raw: string): Combinado {
+  const generico: Combinado = {
+    escopo: ["Caixa de documentos"],
+    sla: "entrega em 48h",
+    entrega: "Drive + índice",
+    validacao: "cliente aprova no portal",
+    foraDeEscopo: [],
+    agentesSugeridos: 2,
+    skillsDetectadas: 1,
+    precoPiso: 0,
+    precoTeto: 0,
+    motivoPreco: "",
+  };
   try {
     const c = JSON.parse(raw) as Partial<Combinado>;
     return {
-      escopo: Array.isArray(c.escopo) ? c.escopo : ["Caixa de documentos"],
-      sla: typeof c.sla === "string" ? c.sla : "entrega em 48h",
-      entrega: typeof c.entrega === "string" ? c.entrega : "Drive + índice",
-      validacao: typeof c.validacao === "string" ? c.validacao : "cliente aprova no portal",
+      escopo: Array.isArray(c.escopo) ? c.escopo : generico.escopo,
+      sla: typeof c.sla === "string" ? c.sla : generico.sla,
+      entrega: typeof c.entrega === "string" ? c.entrega : generico.entrega,
+      validacao: typeof c.validacao === "string" ? c.validacao : generico.validacao,
       foraDeEscopo: Array.isArray(c.foraDeEscopo) ? c.foraDeEscopo : [],
+      agentesSugeridos: numOu(c.agentesSugeridos, generico.agentesSugeridos),
+      skillsDetectadas: numOu(c.skillsDetectadas, generico.skillsDetectadas),
+      precoPiso: numOu(c.precoPiso, generico.precoPiso),
+      precoTeto: numOu(c.precoTeto, generico.precoTeto),
+      motivoPreco: typeof c.motivoPreco === "string" ? c.motivoPreco : "",
     };
   } catch {
-    return {
-      escopo: ["Caixa de documentos"],
-      sla: "entrega em 48h",
-      entrega: "Drive + índice",
-      validacao: "cliente aprova no portal",
-      foraDeEscopo: [],
-    };
+    return generico;
   }
 }
 

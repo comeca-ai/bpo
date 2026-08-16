@@ -132,8 +132,10 @@ export default function Landing() {
 
   const toggleSkill = (id: SkillId) => setOn((s) => ({ ...s, [id]: !s[id] }));
 
-  const fecharPreco = () => {
-    navigate(`/contratar?agentes=${agents}&skills=${Math.max(nSk, 1)}&preco=${monthly}`);
+  const contarBagunca = () => {
+    // Fluxo invertido: o slider é só noção de preço — a proposta sai
+    // depois que o cliente conta a bagunça em /contratar.
+    navigate("/contratar");
   };
 
   return (
@@ -328,6 +330,9 @@ export default function Landing() {
               </span>
               <span className="text-[18px] font-extrabold text-aj-sand">/mês</span>
             </div>
+            <p className="-mt-2 text-[13px] font-bold text-aj-caption">
+              estimativa — o preço final sai depois que você conta a bagunça
+            </p>
             <div className="flex flex-col gap-2 border-t border-aj-cream/15 pt-4 text-[15px] font-bold text-aj-border">
               <div className="flex justify-between gap-3">
                 <span>{agentsLabel} + coordenação</span>
@@ -350,10 +355,10 @@ export default function Landing() {
             <motion.button
               type="button"
               whileTap={{ scale: 0.97 }}
-              onClick={fecharPreco}
+              onClick={contarBagunca}
               className="rounded-full bg-aj-orange px-6 py-4 text-center text-[17px] font-black text-white transition-colors duration-150 hover:bg-aj-orange-hover"
             >
-              Fechar com esse preço
+              Contar minha bagunça →
             </motion.button>
             <p className="text-center text-[13px] font-bold text-aj-faint">
               Sem contrato de fidelidade. Cancela quando quiser.
