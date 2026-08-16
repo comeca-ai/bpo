@@ -55,13 +55,13 @@ export const lotes = mysqlTable("lotes", {
   canal: mysqlEnum("canal", ["whatsapp", "email", "drive", "upload"]).notNull(),
   qtdArquivos: int("qtd_arquivos").notNull(),
   status: mysqlEnum("status", [
-    "proposta",
     "recebido",
     "processando",
     "em_validacao",
     "pronto_entrega",
     "entregue",
     "aprovado",
+    "proposta", // SEMPRE por último: MySQL enum é por posição — inserir no meio corrompe dados
   ]).notNull().default("recebido"),
   solicitadoTexto: text("solicitado_texto").notNull(),
   escopoInclui: text("escopo_inclui").notNull(), // JSON array
