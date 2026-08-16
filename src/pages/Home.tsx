@@ -331,6 +331,185 @@ function FeedAvatar({ who }: { who: FeedWho }) {
   return <MascotAvatar id={who} size={28} radius={8} className="shrink-0" />;
 }
 
+/* ---------- propostas aguardando aceite (o "Combinado") ---------- */
+
+type CombinadoUI = {
+  escopo: string[];
+  sla: string;
+  entrega: string;
+  validacao: string;
+  foraDeEscopo: string[];
+};
+
+const COMBINADO_FALLBACK: CombinadoUI = { escopo: [], sla: '', entrega: '', validacao: '', foraDeEscopo: [] };
+
+type PropostaRow = {
+  id: number;
+  numero: number;
+  titulo: string;
+  solicitadoTexto: string;
+  combinado: string | null;
+  clienteContato: string | null;
+  propostaOrigem: 'texto' | 'audio' | 'seed';
+  qtdArquivos: number;
+  clienteNome: string;
+  precoMensal: number;
+};
+
+function PropostasCard() {
+  const utils = trpc.useUtils();
+  const listQ = trpc.propostas.list.useQuery(undefined, { refetchInterval: 10000, retry: 1 });
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [saindo, setSaindo] = useState<number[]>([]);
+
+  const aceitar = trpc.propostas.aceitar.useMutation({
+    onSuccess: (_d, vars) => {
+      // sai da lista com animação; o polling consolida
+      setSaindo((prev) => [...prev, vars.id]);
+      void utils.propostas.list.invalidate();
+    },
+  });
+
+  const propostas = (listQ.data ?? []) as PropostaRow[];
+  const visiveis = propostas.filter((p) => !saindo.includes(p.id));
+  if (!listQ.data || propostas.length === 0) return null;
+
+  return (
+    <Rise delay={0.03} className="rounded-[18px] border border-aj-border bg-white px-[22px] py-5">
+      <div className="mb-3 flex items-center gap-[9px] text-[15.5px] font-black">
+        Propostas aguardando aceite
+        <span className="rounded-full border border-aj-border bg-aj-cream px-[10px] py-[3px] text-[11px] font-black text-aj-muted">
+          {visiveis.length} na fila
+        </span>
+      </div>
+      <div className="flex flex-col gap-[12px]">
+        <AnimatePresence initial={false}>
+          {visiveis.map((p) => {
+            const c = safeJson<CombinadoUI>(p.combinado, COMBINADO_FALLBACK);
+            const expanded = expandedId === p.id;
+            const escopoVis = expanded ? c.escopo : c.escopo.slice(0, 2);
+            const escopoResto = c.escopo.length - escopoVis.length;
+            return (
+              <motion.div
+                key={p.id}
+                layout="position"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, x: 48 }}
+                transition={{ duration: 0.4, ease: 'easeOut' }}
+                className="rounded-[14px] border border-aj-border bg-aj-cream/40 px-4 py-[14px]"
+              >
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <Pill tone="orange">nova</Pill>
+                  <div className="min-w-0">
+                    <div className="text-[14.5px] font-black leading-[1.3]">
+                      {p.clienteNome}
+                      <span className="ml-2 text-[12px] font-extrabold text-aj-faint">
+                        proposta #{p.numero}
+                        {p.propostaOrigem === 'audio' ? ' · por áudio' : ''}
+                        {p.qtdArquivos > 0 ? ` · ~${p.qtdArquivos} arquivos` : ''}
+                      </span>
+                    </div>
+                    {p.clienteContato && (
+                      <div className="text-[12.5px] font-bold text-aj-muted">{p.clienteContato}</div>
+                    )}
+                  </div>
+                  <div className="ml-auto flex items-center gap-[9px]">
+                    <span className="text-[14px] font-black text-aj-ink [font-variant-numeric:tabular-nums]">
+                      {fmtPreco(p.precoMensal)}
+                    </span>
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.96 }}
+                      onClick={() => setExpandedId(expanded ? null : p.id)}
+                      className="cursor-pointer rounded-full border-[1.5px] border-aj-border bg-white px-4 py-[9px] font-[inherit] text-[12.5px] font-black text-aj-ink transition-colors duration-150 hover:border-aj-ink"
+                    >
+                      {expanded ? 'Fechar' : 'Ver detalhe'}
+                    </motion.button>
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.96 }}
+                      disabled={aceitar.isPending}
+                      onClick={() => aceitar.mutate({ id: p.id })}
+                      className="cursor-pointer rounded-full border-none bg-aj-orange px-4 py-[9px] font-[inherit] text-[12.5px] font-black text-white transition-colors duration-150 hover:bg-aj-orange-hover disabled:cursor-default disabled:opacity-70"
+                    >
+                      ✓ Aceitar
+                    </motion.button>
+                  </div>
+                </div>
+
+                {/* resumo do combinado (escopo colapsado) */}
+                <div className="mt-[10px] flex flex-wrap items-center gap-y-[5px]">
+                  {escopoVis.map((chip) => (
+                    <span
+                      key={chip}
+                      className="mb-[5px] mr-[5px] inline-flex rounded-full border border-[rgba(47,199,158,.4)] bg-aj-teal-soft px-[11px] py-1 text-[12px] font-extrabold text-aj-teal-dark"
+                    >
+                      {chip}
+                    </span>
+                  ))}
+                  {!expanded && escopoResto > 0 && (
+                    <span className="mb-[5px] mr-[5px] inline-flex rounded-full border border-aj-border bg-aj-cream px-[11px] py-1 text-[12px] font-extrabold text-aj-muted">
+                      +{escopoResto} no combinado
+                    </span>
+                  )}
+                  {c.sla && (
+                    <span className="mb-[5px] text-[12px] font-extrabold text-aj-faint">· {c.sla}</span>
+                  )}
+                </div>
+
+                {/* detalhe: combinado completo */}
+                <AnimatePresence initial={false}>
+                  {expanded && (
+                    <motion.div
+                      key="detalhe"
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.3, ease: 'easeOut' }}
+                      className="mt-[10px] flex flex-col gap-[8px] rounded-[11px] border border-aj-border bg-white px-4 py-[12px]"
+                    >
+                      <div className="rounded-[0_10px_10px_0] border-l-[3px] border-aj-orange bg-aj-cream px-[13px] py-[10px] text-[13px] font-bold leading-[1.5] text-aj-muted">
+                        “{p.solicitadoTexto}”
+                      </div>
+                      {[
+                        ['SLA', c.sla],
+                        ['Entrega', c.entrega],
+                        ['Validação', c.validacao],
+                      ].map(([k, v]) =>
+                        v ? (
+                          <div key={k} className="flex justify-between gap-3 text-[13px] font-bold">
+                            <span className="text-[11.5px] font-extrabold uppercase tracking-[.06em] text-aj-faint">
+                              {k}
+                            </span>
+                            <span className="text-right font-black">{v}</span>
+                          </div>
+                        ) : null,
+                      )}
+                      {c.foraDeEscopo.length > 0 && (
+                        <div className="mt-1">
+                          {c.foraDeEscopo.map((chip) => (
+                            <span
+                              key={chip}
+                              className="mb-[5px] mr-[5px] inline-flex rounded-full border border-dashed border-aj-border bg-aj-chipout px-[11px] py-1 text-[12px] font-extrabold text-aj-faint"
+                            >
+                              fora: {chip}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      </div>
+    </Rise>
+  );
+}
+
 /* ---------- página: Console Ops (backend tRPC real) ---------- */
 
 export default function Home() {
@@ -559,6 +738,9 @@ export default function Home() {
           NJ
         </div>
       </Rise>
+
+      {/* PROPOSTAS AGUARDANDO ACEITE */}
+      <PropostasCard />
 
       {/* PEDIDO: SOLICITADO / PRAZO / ESCOPO */}
       <Rise delay={0.06} className="overflow-hidden rounded-[20px] border border-aj-border bg-white">

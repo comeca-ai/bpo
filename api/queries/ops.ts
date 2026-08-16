@@ -193,6 +193,208 @@ export async function metricasOps(loteId: number) {
   };
 }
 
+// ── Propostas (o "Combinado" — fluxo de aceite) ───────────
+
+export type Combinado = {
+  escopo: string[];
+  sla: string;
+  entrega: string;
+  validacao: string;
+  foraDeEscopo: string[];
+};
+
+/** Extrai volume de arquivos do texto ("86 notas", "120 docs", "40 contratos") */
+export function extrairVolume(texto: string): number {
+  const m = texto.match(/(\d{1,5})\s*(notas?(?:\s+fiscais)?|docs?|documentos?|contratos?|arquivos?|recibos?|boletos?|fotos?|comprovantes?|holerites?|laudos?)/i);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+/** SIMULAÇÃO da IA — heurística TS que estrutura o pedido em um "combinado" */
+export function estruturarProposta(descricao: string, temAudio: boolean): Combinado {
+  const texto = descricao.trim();
+
+  // Áudio sem texto: estrutura genérica aguardando transcrição
+  if (temAudio && texto.length === 0) {
+    return {
+      escopo: ["Organização documental (a transcrever do áudio)"],
+      sla: "a combinar — aguardando transcrição do áudio",
+      entrega: "a transcrever do áudio",
+      validacao: "a transcrever do áudio",
+      foraDeEscopo: ["a transcrever"],
+    };
+  }
+
+  const lower = texto.toLowerCase();
+
+  // ── Escopo: tipos de documento mencionados ──
+  const escopo: string[] = [];
+  const tipos: Array<[RegExp, string]> = [
+    [/notas?(?:\s+fiscais)?|\bnf\b/, "Notas fiscais"],
+    [/contratos?/, "Contratos"],
+    [/recibos?/, "Recibos"],
+    [/boletos?/, "Boletos"],
+    [/holerites?|folha/, "Docs de pessoas"],
+    [/laudos?|vistoria/, "Laudos e vistorias"],
+    [/comprovantes?|pix/, "Comprovantes"],
+    [/orçamentos?/, "Orçamentos"],
+    [/di[aá]rio(?:\s+de\s+obra)?/, "Diário de obra"],
+    [/fotos?|imagens?/, "Fotos e imagens"],
+  ];
+  for (const [re, label] of tipos) if (re.test(lower)) escopo.push(label);
+  if (escopo.length === 0) escopo.push("Caixa de documentos");
+  if (/resumo|relat[oó]rio|consolidado/.test(lower)) escopo.push("+ resumo consolidado");
+  if (/planilha|controle/.test(lower)) escopo.push("+ planilha de controle");
+
+  // ── SLA / prazo ──
+  let sla = "entrega em 48h";
+  if (/\bhoje\b|\burgente\b|\bagora\b|\bpra\s+j[aá]\b/.test(lower)) sla = "entrega em 24h (urgente)";
+  else if (/amanh[ãa]/.test(lower)) sla = "entrega até amanhã";
+  else if (/(\d+)\s*h(?:oras)?\b/.test(lower)) {
+    const h = lower.match(/(\d+)\s*h(?:oras)?\b/);
+    sla = `entrega em ${h?.[1]}h`;
+  } else if (/semana/.test(lower)) sla = "entrega em até 7 dias";
+  else if (/(\d+)\s*dias?/.test(lower)) {
+    const d = lower.match(/(\d+)\s*dias?/);
+    sla = `entrega em ${d?.[1]} dias`;
+  }
+
+  // ── Entrega ──
+  const canais: string[] = [];
+  if (/whats(?:app)?/.test(lower)) canais.push("WhatsApp");
+  if (/drive/.test(lower)) canais.push("pasta no Drive");
+  if (/e-?mail/.test(lower)) canais.push("e-mail");
+  const entrega =
+    canais.length > 0
+      ? `Drive organizado + aviso no ${canais.join(" e ")}`
+      : "pasta organizada no Drive + índice de busca";
+
+  // ── Validação ──
+  const validacao = /s[oó]\s+paga?\s+se\s+aprovar|aprova[cç][aã]o|conferir|validar|revisar/.test(lower)
+    ? "humano confere tudo antes da entrega · cliente aprova no portal"
+    : "amostra validada por humano · cliente aprova no portal (só paga se aprovar)";
+
+  // ── Fora de escopo (o que o texto exclui ou pedidos clássicos fora) ──
+  const foraDeEscopo: string[] = [];
+  const sem = texto.match(/(?:sem|menos|exceto|n[ãa]o\s+(?:precisa|inclui|quero))\s+([^.,;]+)/i);
+  if (sem) foraDeEscopo.push(sem[1].trim());
+  if (!/holerite|folha/.test(lower)) foraDeEscopo.push("holerites/folha");
+  if (!/cont[aá]bil|contador|lançamento/.test(lower)) foraDeEscopo.push("lançamento contábil");
+  if (!/assinatura|parecer|jur[ií]dico/.test(lower)) foraDeEscopo.push("assinatura/parecer");
+
+  return { escopo, sla, entrega, validacao, foraDeEscopo };
+}
+
+export async function criarProposta(input: {
+  nome: string;
+  empresa: string;
+  whatsapp: string;
+  descricao: string;
+  combinadoJson: string;
+  agentes: number;
+  skills: number;
+  precoMensal: number;
+  temAudio: boolean;
+}) {
+  const db = getDb();
+
+  // Cliente novo (segmento/cidade ainda a mapear)
+  const [insCli] = await db.insert(clientes).values({
+    nome: input.empresa || input.nome,
+    cidade: "—",
+    segmento: "a mapear",
+    planoAgentes: input.agentes,
+    planoSkills: input.skills,
+    precoMensal: input.precoMensal,
+  });
+  const clienteId = Number(insCli.insertId);
+
+  const [maxRow] = await db
+    .select({ maxNum: sql<number>`coalesce(max(${lotes.numero}), 0)` })
+    .from(lotes);
+  const numero = (maxRow?.maxNum ?? 0) + 1;
+
+  const combinado = safeParseCombinado(input.combinadoJson);
+  const volume = extrairVolume(input.descricao);
+  const prazoEm = new Date(Date.now() + 48 * 36e5);
+  const tituloBase = input.descricao.trim().replace(/\s+/g, " ");
+  const titulo = tituloBase.length > 0
+    ? tituloBase.slice(0, 90)
+    : "Pedido por áudio (a transcrever)";
+
+  const [insLote] = await db.insert(lotes).values({
+    numero,
+    clienteId,
+    titulo,
+    canal: "whatsapp",
+    qtdArquivos: volume,
+    status: "proposta",
+    solicitadoTexto: input.descricao.trim() || "(pedido enviado por áudio — a transcrever)",
+    escopoInclui: JSON.stringify(combinado.escopo),
+    escopoFora: JSON.stringify(combinado.foraDeEscopo),
+    clienteContato: `${input.nome} · ${input.whatsapp}`,
+    combinado: input.combinadoJson,
+    propostaOrigem: input.temAudio ? "audio" : "texto",
+    docsAjeitados: 0,
+    tempoUsadoPct: 0,
+    prazoEm,
+  });
+
+  return { ok: true, loteId: Number(insLote.insertId), numero, clienteId };
+}
+
+function safeParseCombinado(raw: string): Combinado {
+  try {
+    const c = JSON.parse(raw) as Partial<Combinado>;
+    return {
+      escopo: Array.isArray(c.escopo) ? c.escopo : ["Caixa de documentos"],
+      sla: typeof c.sla === "string" ? c.sla : "entrega em 48h",
+      entrega: typeof c.entrega === "string" ? c.entrega : "Drive + índice",
+      validacao: typeof c.validacao === "string" ? c.validacao : "cliente aprova no portal",
+      foraDeEscopo: Array.isArray(c.foraDeEscopo) ? c.foraDeEscopo : [],
+    };
+  } catch {
+    return {
+      escopo: ["Caixa de documentos"],
+      sla: "entrega em 48h",
+      entrega: "Drive + índice",
+      validacao: "cliente aprova no portal",
+      foraDeEscopo: [],
+    };
+  }
+}
+
+export async function listPropostas() {
+  const db = getDb();
+  const rows = await db
+    .select({ lote: lotes, clienteNome: clientes.nome, precoMensal: clientes.precoMensal })
+    .from(lotes)
+    .leftJoin(clientes, eq(lotes.clienteId, clientes.id))
+    .where(eq(lotes.status, "proposta"))
+    .orderBy(desc(lotes.id));
+  return rows.map((r) => ({ ...r.lote, clienteNome: r.clienteNome ?? "", precoMensal: r.precoMensal ?? 0 }));
+}
+
+export async function aceitarProposta(loteId: number) {
+  const db = getDb();
+  const [lote] = await db.select().from(lotes).where(eq(lotes.id, loteId));
+  if (!lote) throw new Error("Proposta não encontrada");
+  if (lote.status !== "proposta") throw new Error("Este lote não é uma proposta pendente");
+  await db.update(lotes).set({ status: "recebido", recebidoEm: new Date() }).where(eq(lotes.id, loteId));
+  await addEvento(loteId, "sys", `Proposta aceita — <b>time alocado</b> · lote #${lote.numero} entrou no pipeline`, true);
+  return { ok: true };
+}
+
+export async function recusarProposta(loteId: number, motivo: string) {
+  const db = getDb();
+  const [lote] = await db.select().from(lotes).where(eq(lotes.id, loteId));
+  if (!lote) throw new Error("Proposta não encontrada");
+  if (lote.status !== "proposta") throw new Error("Este lote não é uma proposta pendente");
+  // Recusa simples e segura: remove a proposta (sem histórico de trabalho ainda)
+  await db.delete(lotes).where(eq(lotes.id, loteId));
+  console.info(`[propostas] recusada #${lote.numero} — motivo: ${motivo}`);
+  return { ok: true };
+}
+
 // ── Simulação (motor de tiques — modo demo) ───────────────
 const AMBIENT: Array<["bia" | "tom" | "lia" | "pedro" | "sys", string, boolean?]> = [
   ["bia", "Triagem: <b>12 fotos</b> do WhatsApp classificadas (conf. média 0,94)"],

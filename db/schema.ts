@@ -55,6 +55,7 @@ export const lotes = mysqlTable("lotes", {
   canal: mysqlEnum("canal", ["whatsapp", "email", "drive", "upload"]).notNull(),
   qtdArquivos: int("qtd_arquivos").notNull(),
   status: mysqlEnum("status", [
+    "proposta",
     "recebido",
     "processando",
     "em_validacao",
@@ -65,6 +66,10 @@ export const lotes = mysqlTable("lotes", {
   solicitadoTexto: text("solicitado_texto").notNull(),
   escopoInclui: text("escopo_inclui").notNull(), // JSON array
   escopoFora: text("escopo_fora").notNull(), // JSON array
+  // ── Fluxo de proposta (o "Combinado") ──
+  clienteContato: varchar("cliente_contato", { length: 200 }), // nome + whatsapp de quem pediu
+  combinado: text("combinado"), // JSON estruturado do pedido (escopo/sla/entrega/validação)
+  propostaOrigem: mysqlEnum("proposta_origem", ["texto", "audio", "seed"]).notNull().default("seed"),
   docsAjeitados: int("docs_ajeitados").notNull().default(0),
   tempoUsadoPct: int("tempo_usado_pct").notNull().default(0), // % do prazo decorrido
   recebidoEm: timestamp("recebido_em").notNull().defaultNow(),
