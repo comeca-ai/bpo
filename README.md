@@ -3,7 +3,7 @@
 > Agentes de IA fazem o volume. Humanos garantem o resultado.
 > Console interno de operações + portal do cliente, full-stack.
 
-**Produção:** http://134.209.115.177/ · **Stack:** React 19 + Vite + TypeScript + Tailwind + shadcn/ui · Hono + tRPC 11 + Drizzle ORM + MySQL 8
+**Produção:** https://ajeita.ia.br/ (Cloudflare) · origin http://134.209.115.177/ · **Stack:** React 19 + Vite + TypeScript + Tailwind + shadcn/ui · Hono + tRPC 11 + Drizzle ORM + MySQL 8
 
 ---
 
